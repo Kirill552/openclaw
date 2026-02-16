@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/max",
+  "version": "2026.2.12",
+  "description": "OpenClaw MAX Messenger channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@maxhub/max-bot-api": "^0.2.2",
+    "@sinclair/typebox": "0.34.48"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "max",
+      "label": "MAX Messenger",
+      "selectionLabel": "MAX Messenger",
+      "docsPath": "/channels/max",
+      "docsLabel": "max",
+      "blurb": "MAX Messenger bot via official Bot API.",
+      "aliases": [
+        "maxmessenger"
+      ],
+      "order": 20,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/max",
+      "localPath": "extensions/max",
+      "defaultChoice": "npm"
+    }
+  }
+}

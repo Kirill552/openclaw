@@ -9,6 +9,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
+import { checkRbacCommand } from "./rbac-native-guard.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
@@ -155,6 +156,35 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     surface: params.command.surface,
     commandSource: params.ctx.CommandSource,
   });
+
+  // RBAC system command guard (universal — all channels: Telegram, MAX, web, custom).
+  // For non-admin users: blocked commands → blockResponse, allowed commands → skip
+  // internal handlers and pass to LLM where the skill handles them.
+  const _rbacSlashMatch = params.command.commandBodyNormalized.match(/^(\/\w+)/);
+  if (_rbacSlashMatch) {
+    const _rbacCheck = checkRbacCommand({
+      cfg: params.cfg,
+      senderId: String(params.command.senderId ?? ""),
+      command: _rbacSlashMatch[1],
+    });
+    if (!_rbacCheck.isAdmin) {
+      if (_rbacCheck.blocked) {
+        logVerbose(
+          `rbac: BLOCKED command="${_rbacSlashMatch[1]}" sender="${params.command.senderId ?? "?"}"`,
+        );
+        return {
+          shouldContinue: false,
+          reply: _rbacCheck.response ? { text: _rbacCheck.response } : undefined,
+        };
+      }
+      // Allowed command for non-admin → skip internal handlers (stop/compact/config/etc.),
+      // pass to LLM where the skill handles it (e.g., /stop = "unsubscribe").
+      logVerbose(
+        `rbac: PASS command="${_rbacSlashMatch[1]}" sender="${params.command.senderId ?? "?"}" → LLM`,
+      );
+      return { shouldContinue: true };
+    }
+  }
 
   for (const handler of HANDLERS) {
     const result = await handler(params, allowTextCommands);
