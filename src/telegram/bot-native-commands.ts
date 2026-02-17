@@ -356,7 +356,44 @@ export const registerTelegramNativeCommands = ({
   }
   // Telegram only limits the setMyCommands payload (menu entries).
   // Keep hidden commands callable by registering handlers for the full catalog.
-  syncTelegramMenuCommands({ bot, runtime, commandsToRegister });
+
+  // RBAC-aware scoped menu: guests see limited commands, admins see all.
+  const rbacScoping = (() => {
+    const pluginsCfg = (cfg as unknown as Record<string, unknown>).plugins as
+      | Record<string, unknown>
+      | undefined;
+    const entries = pluginsCfg?.entries as Record<string, unknown> | undefined;
+    const rbacPlugin = entries?.rbac as Record<string, unknown> | undefined;
+    const rbacConfig = rbacPlugin?.config as Record<string, unknown> | undefined;
+    if (!rbacConfig?.roles || !rbacConfig?.systemCommands) return undefined;
+
+    const adminRole = (rbacConfig.roles as Record<string, unknown>)?.admin as
+      | Record<string, unknown>
+      | undefined;
+    const adminUsers = Array.isArray(adminRole?.users) ? (adminRole!.users as string[]) : [];
+    if (adminUsers.length === 0) return undefined;
+
+    const sysCmds = rbacConfig.systemCommands as Record<string, unknown>;
+    const allowedCmds = Array.isArray(sysCmds.allowed)
+      ? (sysCmds.allowed as string[]).map((c) => c.replace(/^\//, "").toLowerCase())
+      : [];
+    // Always include /help in guest menu when guestHelp is configured
+    if (sysCmds.guestHelp && !allowedCmds.includes("help")) {
+      allowedCmds.push("help");
+    }
+
+    // Build guest commands from the full list, filtered by allowed
+    const guestCommands = commandsToRegister.filter((cmd) =>
+      allowedCmds.includes(cmd.command.toLowerCase()),
+    );
+
+    return {
+      adminChatIds: adminUsers.map((id) => Number(id)),
+      guestCommands,
+    };
+  })();
+
+  syncTelegramMenuCommands({ bot, runtime, commandsToRegister, rbacScoping });
 
   if (commandsToRegister.length > 0 || pluginCatalog.commands.length > 0) {
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {

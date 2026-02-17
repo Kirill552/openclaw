@@ -73,14 +73,25 @@ export function buildCappedTelegramMenuCommands(params: {
   return { commandsToRegister, totalCommands, maxCommands, overflowCount };
 }
 
+/**
+ * RBAC-aware scoped menu registration.
+ * When rbacScoping is provided:
+ *   - Default scope (all users) sees only guestCommands
+ *   - Each admin chat sees all commandsToRegister
+ * When rbacScoping is not provided: backwards-compatible behavior.
+ */
 export function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
   commandsToRegister: TelegramMenuCommand[];
+  rbacScoping?: {
+    adminChatIds: number[];
+    guestCommands: TelegramMenuCommand[];
+  };
 }): void {
-  const { bot, runtime, commandsToRegister } = params;
+  const { bot, runtime, commandsToRegister, rbacScoping } = params;
   const sync = async () => {
-    // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
+    // Delete default scope commands first
     if (typeof bot.api.deleteMyCommands === "function") {
       await withTelegramApiErrorLogging({
         operation: "deleteMyCommands",
@@ -89,15 +100,60 @@ export function syncTelegramMenuCommands(params: {
       }).catch(() => {});
     }
 
-    if (commandsToRegister.length === 0) {
+    if (!rbacScoping) {
+      // No RBAC scoping — register all commands for everyone (backwards compatible)
+      if (commandsToRegister.length > 0) {
+        await withTelegramApiErrorLogging({
+          operation: "setMyCommands",
+          runtime,
+          fn: () => bot.api.setMyCommands(commandsToRegister),
+        });
+      }
       return;
     }
 
-    await withTelegramApiErrorLogging({
-      operation: "setMyCommands",
-      runtime,
-      fn: () => bot.api.setMyCommands(commandsToRegister),
-    });
+    // RBAC scoping: guest commands for default scope, full commands for admin chats
+    const { adminChatIds, guestCommands } = rbacScoping;
+
+    if (guestCommands.length > 0) {
+      await withTelegramApiErrorLogging({
+        operation: "setMyCommands(default)",
+        runtime,
+        fn: () =>
+          bot.api.setMyCommands(guestCommands, {
+            scope: { type: "default" },
+          }),
+      });
+    }
+
+    // Set full command menu for each admin user's private chat
+    for (const chatId of adminChatIds) {
+      // Delete admin-scoped commands first (clean slate)
+      await withTelegramApiErrorLogging({
+        operation: `deleteMyCommands(chat:${chatId})`,
+        runtime,
+        fn: () =>
+          bot.api.deleteMyCommands({
+            scope: { type: "chat", chat_id: chatId },
+          }),
+      }).catch(() => {});
+
+      if (commandsToRegister.length > 0) {
+        await withTelegramApiErrorLogging({
+          operation: `setMyCommands(chat:${chatId})`,
+          runtime,
+          fn: () =>
+            bot.api.setMyCommands(commandsToRegister, {
+              scope: { type: "chat", chat_id: chatId },
+            }),
+        });
+      }
+    }
+
+    runtime.log?.(
+      `rbac: menu scoped — ${guestCommands.length} guest commands (default), ` +
+        `${commandsToRegister.length} admin commands for ${adminChatIds.length} admin(s)`,
+    );
   };
 
   void sync().catch(() => {});
